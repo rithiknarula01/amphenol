@@ -1,0 +1,99 @@
+description: Creates a new Amazon Machine Image (AMI) from an Amazon EC2 instance
+schemaVersion: '0.3'
+assumeRole: '{{ AutomationAssumeRole }}'
+parameters:
+  InstanceId:
+    type: String
+    description: (Required) The ID of the Amazon EC2 instance.
+  NoReboot:
+    type: Boolean
+    description: (Optional) Do not reboot the instance before creating the image.
+    default: false
+  AutomationAssumeRole:
+    type: String
+    description: '(Optional) The ARN of the role that allows Automation to perform the actions on your behalf. '
+    default: ''
+  LaunchTemplateName:
+    type: String
+    description: Name of the Launch Template to update
+  AutoScalingGroupName:
+    type: String
+    description: Name of the autoscaling group to refresh.
+mainSteps:
+  - name: createImage
+    action: aws:createImage
+    nextStep: RunScript_CreateLaunchTemplateVersion
+    isEnd: false
+    onFailure: Abort
+    inputs:
+      InstanceId: '{{ InstanceId }}'
+      ImageName: '{{ InstanceId }}_{{automation:EXECUTION_ID}}'
+      NoReboot: '{{ NoReboot }}'
+      ImageDescription: Image created via SSM Automation
+    outputs:
+      - Type: String
+        Name: output_image_id
+        Selector: createImage.ImageId
+  - name: RunScript_CreateLaunchTemplateVersion
+    action: aws:executeScript
+    nextStep: RunScript_refreshInstances
+    isEnd: false
+    onCancel: Abort
+    onFailure: Abort
+    inputs:
+      Runtime: python3.9
+      Handler: script_handler
+      Script: |-
+        import boto3
+
+        ec2_client = boto3.client('ec2')
+
+        def script_handler(events, context):
+          response = ec2_client.create_launch_template_version(
+              DryRun=False,
+              LaunchTemplateName=events.get('LaunchTemplateName'),
+              SourceVersion='$Latest',
+              VersionDescription='Version updated by SSM Automation',
+              LaunchTemplateData={
+                  'ImageId': events.get('ImageId')
+              }
+          )
+          
+          return events
+      InputPayload:
+        ImageId: '{{ createImage.ImageId }}'
+        ImageState: '{{ createImage.ImageState }}'
+        Payload: '{{ createImage.OutputPayload }}'
+        LaunchTemplateName: '{{ LaunchTemplateName }}'
+  - name: RunScript_refreshInstances
+    action: aws:executeScript
+    isEnd: true
+    inputs:
+      Runtime: python3.8
+      Handler: script_handler
+      InputPayload:
+        AutoScalingGroupName: '{{ AutoScalingGroupName }}'
+        LaunchTemplateName: '{{ LaunchTemplateName }}'
+      Script: |
+        import boto3
+
+        as_client = boto3.client('autoscaling')
+
+        def script_handler(events, context):
+          response = as_client.start_instance_refresh(
+            AutoScalingGroupName=events.get('AutoScalingGroupName'),
+            DesiredConfiguration={
+                'LaunchTemplate': {
+                    'LaunchTemplateName': events.get('LaunchTemplateName'),
+                    'Version': '$Latest',
+                },
+            },
+            Preferences={
+                'InstanceWarmup': 120,
+                'MinHealthyPercentage': 100,
+            }
+          )
+          
+          return events
+outputs:
+  - createImage.ImageId
