@@ -8,7 +8,7 @@ def lambda_handler(event, context):
     ses_client = boto3.client('ses')
 
     # Set parameters
-    golden_ami_id = '	ami-080562ec47e8c508c' 
+    golden_ami_id = 'ami-0fd95cb73815b2ed0' 
     subnet_id = 'subnet-033693bd4f800986e'
     key_name = 'amphenolpoc'
     instance_type = 't2.micro'
